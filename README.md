@@ -61,11 +61,11 @@ mesh_triangles 32452
 
 ### 动图
 
-![](/home/l/Videos/gif/24帧点云配准.gif)
+![](./images/24帧点云配准.gif)
 
 ​										   24帧点云重建
 
-![点云重建](/home/l/Videos/gif/点云重建.gif)
+![点云重建](./images/点云重建.gif)
 
 ​											      点云重建
 
