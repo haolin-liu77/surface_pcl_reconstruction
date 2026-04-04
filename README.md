@@ -65,7 +65,7 @@ mesh_triangles 32452
 
 ​										   24帧点云重建
 
-![点云重建](./images/点云重建.gif)
+![附带RGB的羊重建](./images/附带RGB的羊重建.gif)
 
 ​											      点云重建
 
