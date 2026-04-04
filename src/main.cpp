@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
   ::std::cout << "wrote " << fused_path << "\n";
 
   t = ::std::chrono::steady_clock::now();
-  auto mesh_cloud = sheep_recon::voxel_down_xyz(fused, static_cast<float>(params.mesh_voxel));
+  auto mesh_cloud = sheep_recon::voxel_down_for_mesh(fused, static_cast<float>(params.mesh_voxel));
   tm.mesh_down = sheep_recon::elapsed_ms_reset(t);
 
   ::pcl::PolygonMesh mesh;

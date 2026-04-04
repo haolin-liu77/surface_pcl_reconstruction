@@ -58,7 +58,7 @@ inline RegistrationMetrics compute_registration_metrics(const ::std::vector<Clou
 }
 
 inline ::std::string format_metrics_report(const PipelineTimingsMs& tm, const RegistrationMetrics& reg,
-                                           size_t fused_points, size_t mesh_xyz_points,
+                                           size_t fused_points, size_t mesh_input_points,
                                            size_t mesh_polygons, double total_wall_ms) {
   ::std::string o;
   o += "=== wall_time_ms ===\n";
@@ -87,7 +87,7 @@ inline ::std::string format_metrics_report(const PipelineTimingsMs& tm, const Re
   o += "consensus_nn_min_m " + ::std::to_string(reg.consensus_nn_min_m) + "\n";
   o += "=== reconstruction_io ===\n";
   o += "fused_points " + ::std::to_string(fused_points) + "\n";
-  o += "mesh_input_points_xyz " + ::std::to_string(mesh_xyz_points) + "\n";
+  o += "mesh_input_points " + ::std::to_string(mesh_input_points) + "\n";
   o += "mesh_triangles " + ::std::to_string(mesh_polygons) + "\n";
   return o;
 }

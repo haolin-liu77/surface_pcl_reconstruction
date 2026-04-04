@@ -67,30 +67,28 @@ inline CloudPtr filter_fused_outliers(CloudConstPtr in, const ReconParams& p) {
   return work;
 }
 
-inline ::pcl::PointCloud<::pcl::PointXYZ>::Ptr voxel_down_xyz(CloudConstPtr in, float leaf) {
-  ::pcl::PointCloud<::pcl::PointXYZ>::Ptr xyz(new ::pcl::PointCloud<::pcl::PointXYZ>);
-  ::pcl::copyPointCloud(*in, *xyz);
-  ::pcl::VoxelGrid<::pcl::PointXYZ> vg;
-  vg.setInputCloud(xyz);
+/// 体素下采样供网格重建用（保留 RGB；勿再转成 PointXYZ，否则 PLY 顶点颜色会错乱或缺失）
+inline CloudPtr voxel_down_for_mesh(CloudConstPtr in, float leaf) {
+  CloudPtr out(new Cloud);
+  ::pcl::VoxelGrid<PointT> vg;
+  vg.setInputCloud(in);
   vg.setLeafSize(leaf, leaf, leaf);
-  ::pcl::PointCloud<::pcl::PointXYZ>::Ptr out(new ::pcl::PointCloud<::pcl::PointXYZ>);
   vg.filter(*out);
   return out;
 }
 
-inline void greedy_projection_mesh(::pcl::PointCloud<::pcl::PointXYZ>::ConstPtr cloud, const ReconParams& p,
-                                   ::pcl::PolygonMesh& mesh) {
-  ::pcl::NormalEstimation<::pcl::PointXYZ, ::pcl::Normal> ne;
+inline void greedy_projection_mesh(CloudConstPtr cloud, const ReconParams& p, ::pcl::PolygonMesh& mesh) {
+  ::pcl::NormalEstimation<PointT, ::pcl::Normal> ne;
   ne.setInputCloud(cloud);
-  ::pcl::search::KdTree<::pcl::PointXYZ>::Ptr tree(new ::pcl::search::KdTree<::pcl::PointXYZ>);
+  ::pcl::search::KdTree<PointT>::Ptr tree(new ::pcl::search::KdTree<PointT>);
   ne.setSearchMethod(tree);
   ne.setRadiusSearch(static_cast<float>(p.normal_radius));
   ::pcl::PointCloud<::pcl::Normal>::Ptr normals(new ::pcl::PointCloud<::pcl::Normal>);
   ne.compute(*normals);
-  ::pcl::PointCloud<::pcl::PointNormal>::Ptr pts(new ::pcl::PointCloud<::pcl::PointNormal>);
+  ::pcl::PointCloud<::pcl::PointXYZRGBNormal>::Ptr pts(new ::pcl::PointCloud<::pcl::PointXYZRGBNormal>);
   ::pcl::concatenateFields(*cloud, *normals, *pts);
 
-  ::pcl::GreedyProjectionTriangulation<::pcl::PointNormal> gp3;
+  ::pcl::GreedyProjectionTriangulation<::pcl::PointXYZRGBNormal> gp3;
   gp3.setSearchRadius(static_cast<float>(p.gpt_search_radius));
   gp3.setMu(static_cast<float>(p.gpt_mu));
   gp3.setMaximumNearestNeighbors(p.gpt_max_nn);
