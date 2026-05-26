@@ -1,109 +1,156 @@
-# 羊多视角点云配准与表面重建
+# 羊体多视角点云配准与表面重建
 
-基于 PCL 的离线 C++ 流水线：多帧 RGB 点云 → 配准对齐 → 融合去噪 → 贪婪投影三角网格，输出 `fused.pcd` 与 `mesh_greedy.ply`。
+基于 PCL 的离线 C++ 流水线：多帧 RGB 点云 → 配准对齐 → 融合去噪 → 贪婪投影三角网格。
 
-## 技术路径概述
+## 方法
 
-1. **数据加载**：递归收集 `dataset/**/*.pcd`，按文件名排序（与采集序号一致）。
-2. **单帧预处理**（每帧独立）：统计离群（SOR）→ 移动最小二乘平滑（MLS）→ 体素下采样 → RANSAC 平面分割去地面，得到多帧「仅羊体为主」的点云。
-3. **粗到精链式配准**：相邻帧双阶段 ICP（先大对应距离、再精配），链式累积到第 0 帧坐标系。
-4. **ELCH 闭环优化**：将全部帧作为闭环图，减轻顺序 ICP 的累积误差。
-5. **Leave-One-Out 细化**：每帧相对「其余帧融合体素靶」再做 ICP，纠正单帧偏离。
-6. **共识裁剪**：剔除相对共识表面过远的点，削弱错位层与悬空几何。
-7. **最差帧 Yaw 多初值**：对「与共识偏差最大」的一帧，在绕竖轴的一组角度上重试 ICP，减轻局部最优导致的头腿重叠。
-8. **短轮 LOO 巩固**：上述步骤后再做少量 LOO 迭代。
-9. **融合与后处理**：体素融合 → 可选 Z 直通滤波 → **欧式聚类保留最大簇** → 融合点云上 SOR + 半径离群（ROR）→ 输出 `fused.pcd`。
-10. **网格重建**：融合点云体素下采样 → 法线估计 → **Greedy Projection Triangulation（GP3）** → `mesh_greedy.ply`。
+### 流水线总览
 
-工程结构：**逻辑在 `include/sheep_recon/*.hpp` 解耦**，`src/main.cpp` 负责参数与流程编排；可选 `--dataset`、`--output`。
-
-## 效果（示例运行）
-
-一次完整运行示例（24 帧，硬件与环境以实际机器为准）：
-
-```text
-$ ./build/sheep_reconstruct --dataset dataset --output output
-loaded 24 pcd(s)
-wrote output/fused.pcd
-wrote output/mesh_greedy.ply
-=== wall_time_ms ===
-total 93328.633911
-load_pcfs 47.373792
-preprocess_frames 24074.041776
-sequential_icp 21303.406471
-apply_transforms 1.924851
-elch 2112.456705
-loo_refine 30042.201911
-strip_consensus 658.630325
-yaw_multistart 7327.834451
-loo_after_consensus 6628.811671
-fuse_voxel 22.208793
-passthrough_z 0.208069
-cluster_largest 83.259008
-fused_sor_ror 123.558048
-mesh_voxel_down 1.089193
-mesh_greedy 203.625920
-save_fused_pcd 0.500892
-save_mesh_ply 57.711476
-=== registration_quality (lower mean/max NN to LOO consensus is better) ===
-frames 24
-consensus_nn_mean_m 0.009014
-consensus_nn_max_m 0.016496
-consensus_nn_min_m 0.008191
-=== reconstruction_io ===
-fused_points 35684
-mesh_input_points_xyz 17063
-mesh_triangles 32452
+```
+多帧 PCD ──→ 单帧预处理 ──→ 链式 ICP ──→ ELCH 闭环 ──→ LOO 细化
+                                                            │
+  输出 ←── GP3 网格 ←── 融合后处理 ←── 共识裁剪 + Yaw 多初值 ←─┘
 ```
 
-- **配准质量**：`consensus_nn_*` 为各帧到 LOO 共识目标的平均最近距离（米）；**数值越小越好**。
-- **重建规模**：融合点数、网格输入下采样点数、三角面片数见 `reconstruction_io`；完整分项耗时见 `wall_time_ms`，并写入 `output/metrics.txt`。
+### 1. 单帧预处理
 
-### 动图
-
-![](./images/24帧点云配准.gif)
-
-​										   24帧点云重建
-
-![附带RGB的羊重建](./images/附带RGB的羊重建.gif)
-
-​											      点云重建
+每帧独立执行四步清洗：
 
 
+| 步骤  | 算法                                | 作用           |
+| --- | --------------------------------- | ------------ |
+| 去噪  | Statistical Outlier Removal (SOR) | 删除稀疏离群点      |
+| 平滑  | Moving Least Squares (MLS)        | 消除传感器抖动噪声    |
+| 降采样 | Voxel Grid                        | 统一点密度，加速后续   |
+| 去地面 | RANSAC 平面分割                       | 分离地面，仅保留羊体主体 |
 
-## 创新点（相对「固定 4 视角 + 单次 ICP + Poisson」类流程）
 
-| 方向 | 说明 |
-|------|------|
-| **N 视角泛化** | 不限于 04/06/08/10 四帧，按数据集自动适配帧数（如 06–27 共 22 个视角等）。 |
-| **LOO + 共识层** | 每帧对齐「除自身外的融合靶」，再走共识距离裁剪，专治某一帧小角度错位、叠层。 |
-| **最差帧 Yaw 多初值** | 自动找出与共识最不一致的帧，在竖轴旋转的多组初值上重试 ICP，减轻后腿叠头等局部最优。 |
-| **融合后聚类 + 双离群** | 最大簇分离主体与地面碎团；SOR+ROR 进一步削飞点，且已移除「整云二次 RANSAC 去地」以避免误删躯干。 |
-| **GP3 网格** | 采用贪婪投影三角化，避免闭环配准略差时 Poisson 易产生难看封闭壳的问题（可按需对比）。 |
-| **可复现指标** | 分阶段耗时、共识 NN 指标、点数与面数写入终端与 `metrics.txt`，便于调参与对比实验。 |
+### 2. 粗到精链式配准
 
-## 原始数据集特点与数量
+相邻帧执行双阶段 ICP：先以大对应距离（0.12m）粗配，再以小对应距离（0.04m）精配。变换矩阵沿帧序链式累积，将全部帧统一到第 0 帧坐标系。
 
-- **数量（当前示例）**：`dataset` 下 **24 个** `.pcd`（含多视角序列，如 `out_captured0406.pcd` … `out_captured0427.pcd` 及少量重复/测试文件时总数可能变化，以实际目录为准）。
-- **内容**：每帧主要为 **羊体 + 地面**；视角沿序号递增，**观测方位角依次变化**（转台式采集），适合链式 ICP + 闭环（ELCH）。
-- **点类型**：`PointXYZRGB`（PCD 中含 `rgb` 字段）。
+### 3. ELCH 闭环优化
 
-## 构建与运行
+将首尾帧视为闭合回路，利用 `pcl::registration::ELCH` 分配闭环残差到各帧，抑制链式 ICP 的累积漂移。
+
+### 4. Leave-One-Out (LOO) 细化
+
+每帧对"除自身外其余帧的体素融合靶"做 ICP，纠正单帧在链式/闭环后的残余偏移。默认执行 2 轮。
+
+### 5. 共识裁剪 + 最差帧 Yaw 多初值
+
+- **共识裁剪**：计算各帧点到共识表面的距离，删除超过阈值（38mm）的点——即错位层、悬空半截腿等伪影。
+- **Yaw 多初值**：自动识别与共识偏差最大的帧，在绕 Z 轴 ±20° 范围内以 4° 步长尝试多组初始旋转 + ICP，跳出局部最优（如后腿叠头）。
+- 之后再执行 1 轮 LOO 巩固。
+
+### 6. 融合与后处理
+
+
+| 步骤     | 算法                           | 作用         |
+| ------ | ---------------------------- | ---------- |
+| 体素融合   | Voxel Grid (0.012m)          | 合并所有帧为统一点云 |
+| Z 直通滤波 | PassThrough [0.12, 2.0]m     | 去除地面残余与天花板 |
+| 最大簇提取  | Euclidean Cluster Extraction | 分离主体与离散碎团  |
+| 双离群滤波  | SOR + Radius Outlier Removal | 削飞点与孤立碎屑   |
+
+
+### 7. GP3 网格重建
+
+融合点云先体素降采样（0.015m），估计法线后执行 **Greedy Projection Triangulation**。相比 Poisson 重建，GP3 在配准略有残差时不会产生封闭壳伪影，更适合本场景。
+
+## 构建与使用
+
+### 依赖
+
+- **PCL** ≥ 1.10（common, io, filters, registration, kdtree, search, surface, segmentation, features）
+- **Eigen**（通过 PCL 间接依赖）
+- **C++17**（`std::filesystem`）
+- **CMake** ≥ 3.16
+
+### 编译
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
-./build/sheep_reconstruct --dataset dataset --output output
 ```
 
-依赖：PCL（common, io, filters, registration, kdtree, search, surface, segmentation, features 等）、C++17、Eigen。
+### 运行
 
-## 输出文件
+```bash
+./build/sheep_reconstruct --dataset <点云目录> --output <输出目录>
+```
 
-| 路径 | 说明 |
-|------|------|
-| `output/fused.pcd` | 配准并后处理后的融合点云（二进制 PCD） |
-| `output/mesh_greedy.ply` | GP3 三角网格 |
-| `output/metrics.txt` | 与终端一致的性能与质量指标 |
+- `--dataset`：包含 `.pcd` 文件的目录，递归搜索（默认 `dataset`）
+- `--output`：输出目录（默认 `output`）
 
-算法默认参数见 [`include/sheep_recon/types.hpp`](include/sheep_recon/types.hpp)。
+### 参数调整
+
+所有算法参数在 `[include/sheep_recon/types.hpp](include/sheep_recon/types.hpp)` 的 `ReconParams` 中定义，按场景可调关键项：
+
+
+| 参数                          | 默认值   | 说明                     |
+| --------------------------- | ----- | ---------------------- |
+| `voxel_leaf`                | 0.005 | 预处理降采样体素边长(m)，越小越精细但越慢 |
+| `icp_corr_dist`             | 0.04  | ICP 精配对应距离(m)          |
+| `loo_refine_iters`          | 2     | LOO 细化轮数               |
+| `consensus_nn_max_dist`     | 0.038 | 共识裁剪距离阈值(m)            |
+| `multistart_yaw_step_deg`   | 4     | Yaw 搜索步长(°)            |
+| `multistart_yaw_half_steps` | 5     | Yaw 搜索半步数（±20°）        |
+| `fuse_voxel`                | 0.012 | 融合体素边长(m)              |
+| `cluster_tolerance`         | 0.028 | 欧式聚类距离阈值(m)            |
+| `mesh_voxel`                | 0.015 | 网格输入降采样体素(m)           |
+| `gpt_search_radius`         | 0.055 | GP3 搜索半径(m)            |
+
+
+### 输出文件
+
+
+| 文件                       | 说明                |
+| ------------------------ | ----------------- |
+| `output/fused.pcd`       | 配准融合后的点云（二进制 PCD） |
+| `output/mesh_greedy.ply` | GP3 三角网格          |
+| `output/metrics.txt`     | 分阶段耗时与配准质量指标      |
+
+
+## 效果
+
+### 运行指标（24 帧示例）
+
+```
+$ ./build/sheep_reconstruct --dataset dataset --output output
+
+=== wall_time_ms ===
+total               93328
+preprocess_frames   24074
+sequential_icp      21303
+loo_refine          30042
+yaw_multistart       7327
+mesh_greedy           203
+
+=== registration_quality ===
+consensus_nn_mean   0.009 m
+consensus_nn_max    0.016 m
+consensus_nn_min    0.008 m
+
+=== reconstruction_io ===
+fused_points        35684
+mesh_triangles      32452
+```
+
+- `consensus_nn_*`：各帧到 LOO 共识目标的平均最近邻距离，**越小配准越准**。
+- 完整分项耗时与指标自动写入 `output/metrics.txt`。
+
+## 工程结构
+
+```
+include/sheep_recon/
+├── types.hpp          # 类型别名 + ReconParams 全参数默认值
+├── preprocess.hpp     # 单帧预处理（SOR → MLS → 体素 → RANSAC）
+├── registration.hpp   # 配准（ICP链 + ELCH + LOO + 共识裁剪 + Yaw搜索）
+├── cluster.hpp        # 欧式聚类提取最大簇
+├── fuse_mesh.hpp      # 融合 / 滤波 / GP3 网格重建
+└── metrics.hpp        # 计时 + 配准质量指标 + 报告输出
+src/
+└── main.cpp           # 参数解析与流程编排
+```
+

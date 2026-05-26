@@ -15,3 +15,9 @@ add_executable(sheep_reconstruct
 )
 target_include_directories(sheep_reconstruct PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_link_libraries(sheep_reconstruct ${PCL_LIBRARIES})
+
+add_executable(gp3_single
+  src/gp3_single.cpp
+)
+target_include_directories(gp3_single PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(gp3_single ${PCL_LIBRARIES})
